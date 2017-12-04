@@ -1,0 +1,74 @@
+- hosts: localhost
+  tasks:
+  - name: Create security group for temporary EC2 instance
+    ec2_group:
+      name: ami-builder-sg
+      description: Temporary security groupd for ami builder
+      vpc_id: "{{ vpc_id }}"
+      rules:
+        - proto: tcp
+          from_port: 22
+          to_port: 22
+          cidr_ip: "{{ security_group_source_cidr }}"
+    register: security_group
+
+  - name: Create temporary key
+    ec2_key:
+      name: ami-builder
+      region: "{{ region }}"
+      key_material: "{{ lookup('file', lookup('env','HOME') + '/.ssh/id_rsa.pub') }}"
+
+  - name: Launch temporary instance
+    ec2:
+      assign_public_ip: yes
+      region: "{{ region }}"
+      key_name: "ami-builder"
+      instance_type: m1.small
+      vpc_subnet_id: "{{ vpc_subnet_id }}"
+      image: "{{ base_image }}"
+      group_id: "{{ security_group.group_id }}"
+      wait: yes
+      wait_timeout: 500
+      exact_count: 1
+      count_tag:
+         role: ami_builder
+      instance_tags:
+         role: ami_builder
+    register: ami_instance
+
+  - name: Wait for SSH to start
+    wait_for: port=22 host={{ ami_instance.tagged_instances.0.public_ip }} timeout=300 search_regex=OpenSSH
+
+  - name: Add host to group
+    add_host: name={{ ami_instance.tagged_instances.0.public_dns_name }} groups=build_instance
+
+- hosts: build_instance
+  remote_user: ec2-user
+  roles:
+    - "{{ image_role }}"
+
+- hosts: localhost
+  tasks:
+  - name: Create AMI image
+    ec2_ami:
+      instance_id: "{{ ami_instance.tagged_instances.0.id }}"
+      wait: yes
+      name: "{{ image_name }}-{{ image_version }}"
+      launch_permissions:
+        user_ids: "{{ ami_use_permissions }}"
+      tags:
+        Name: "{{ image_name }}"
+        Version: "{{ image_version  }}"
+    register: image
+
+  - name: Terminate temporary instance
+    ec2:
+      aws_access_key: "{{ assumed_role.sts_creds.access_key }}"
+      aws_secret_key: "{{ assumed_role.sts_creds.secret_key }}"
+      security_token: "{{ assumed_role.sts_creds.session_token }}"
+      state: absent
+      instance_ids: "{{ ami_instance.tagged_instances.0.id }}"
+
+  - name: AMI info
+    debug:
+      var: image

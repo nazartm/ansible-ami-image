@@ -1,0 +1,9 @@
+vpc_id: vpc-111
+vpc_subnet_id: subnet-111
+region: eu-west-1
+base_image: ami-1a962263
+security_group_source_cidr: 0.0.0.0/0
+image_name: application-image
+ami_use_permissions: [ "accountId", "accountId" ]
+image_role: java
+image_version: 1.0
